@@ -2,6 +2,7 @@
 
 A [Cobblemon](https://www.curseforge.com/minecraft/mc-mods/cobblemon) addon that adds a configurable **Pokémon Spawner** block, in the spirit of Pixelmon's spawner, built for adventure maps.
 
+[![CurseForge](https://img.shields.io/curseforge/dt/1718210?logo=curseforge&label=Downloads&color=f16436)](https://www.curseforge.com/minecraft/mc-mods/cobblemon-spawner)
 [![Minecraft](https://img.shields.io/badge/Minecraft-1.21.1-green?logo=minecraft)](https://www.minecraft.net)
 [![Fabric](https://img.shields.io/badge/Fabric-supported-dbb37d?logo=fabric)](https://fabricmc.net)
 [![NeoForge](https://img.shields.io/badge/NeoForge-supported-e04e14)](https://neoforged.net)
