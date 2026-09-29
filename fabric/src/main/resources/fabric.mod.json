@@ -8,6 +8,7 @@
     "Darcosse"
   ],
   "license": "MIT License",
+  "icon": "icon.png",
   "environment": "*",
   "entrypoints": {
     "main": [

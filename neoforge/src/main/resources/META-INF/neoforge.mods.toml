@@ -6,6 +6,9 @@ license = "MIT License"
 modId = "cobblemonspawner"
 version = "${version}"
 displayName = "Cobblemon Spawner"
+logoFile = "icon.png"
+# Pixel art: without this the mod list smooths the logo into a blur.
+logoBlur = false
 authors = "Darcosse"
 description = '''
 A configurable Pokémon spawner block for Cobblemon, built for adventure maps.
