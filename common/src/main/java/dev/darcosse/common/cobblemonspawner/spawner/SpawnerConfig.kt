@@ -140,7 +140,7 @@ class SpawnerConfig {
     var redstone = RedstoneMode.IGNORED
     var onceOnly = false
     var uncatchable = false
-    var persistent = true
+    var persistent = false
     var noAi = false
 
     /**
