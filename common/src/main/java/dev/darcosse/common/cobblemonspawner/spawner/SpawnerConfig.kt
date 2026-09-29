@@ -20,13 +20,34 @@ enum class ShinyMode(val propertyToken: String?) {
 }
 
 /**
- * Time of day during which the spawner is allowed to work.
+ * Time of day during which a pool entry is allowed to spawn.
  */
 enum class TimeCondition {
     ANY, DAY, NIGHT;
 
     /** Translation key of the label shown on the time cycle button. */
     val translationKey: String get() = "gui.cobblemonspawner.time.${name.lowercase()}"
+}
+
+/**
+ * Weather during which a pool entry is allowed to spawn. Evaluated on the dimension-wide
+ * weather, like Cobblemon's own `isRaining` / `isThundering` spawn conditions: a desert still
+ * counts as "rain" while it rains elsewhere.
+ */
+enum class WeatherCondition {
+    ANY,
+
+    /** No rain and no thunderstorm. */
+    CLEAR,
+
+    /** Raining, thunderstorms included. */
+    RAIN,
+
+    /** Thunderstorm only. */
+    THUNDER;
+
+    /** Translation key of the label shown on the weather cycle button. */
+    val translationKey: String get() = "gui.cobblemonspawner.entry.weather.${name.lowercase()}"
 }
 
 /**
@@ -54,6 +75,8 @@ enum class RedstoneMode {
  * @property shiny forced shiny state, or natural odds
  * @property extraProperties free Cobblemon properties appended as-is (form aspects, nature, ...)
  * @property placement where around the spawner this entry may appear
+ * @property time time of day during which this entry may spawn
+ * @property weather weather during which this entry may spawn
  */
 data class SpawnEntry(
     val species: String,
@@ -62,7 +85,9 @@ data class SpawnEntry(
     val maxLevel: Int = DEFAULT_MAX_LEVEL,
     val shiny: ShinyMode = ShinyMode.DEFAULT,
     val extraProperties: String = "",
-    val placement: SpawnPlacement = SpawnPlacement.AUTO
+    val placement: SpawnPlacement = SpawnPlacement.AUTO,
+    val time: TimeCondition = TimeCondition.ANY,
+    val weather: WeatherCondition = WeatherCondition.ANY
 ) {
 
     /**
@@ -84,6 +109,8 @@ data class SpawnEntry(
         putString(KEY_SHINY, shiny.name)
         putString(KEY_EXTRA, extraProperties)
         putString(KEY_PLACEMENT, placement.name)
+        putString(KEY_TIME, time.name)
+        putString(KEY_WEATHER, weather.name)
     }
 
     companion object {
@@ -101,10 +128,15 @@ data class SpawnEntry(
         private const val KEY_SHINY = "Shiny"
         private const val KEY_EXTRA = "Extra"
         private const val KEY_PLACEMENT = "Placement"
+        private const val KEY_TIME = "Time"
+        private const val KEY_WEATHER = "Weather"
 
         /**
          * Reads an entry written by [toTag]. A missing placement (format version 2) reads as
-         * [SpawnPlacement.AUTO], which is the migration from version 2.
+         * [SpawnPlacement.AUTO], which is the migration from version 2. A missing time
+         * (versions 1 to 3) reads as ANY; [SpawnerConfig.fromTag] then applies the old
+         * spawner-wide value. A missing weather (versions 1 to 4) reads as ANY, which is the
+         * migration to version 5: weather conditions did not exist before.
          */
         fun fromTag(tag: CompoundTag): SpawnEntry = SpawnEntry(
             species = tag.getString(KEY_SPECIES),
@@ -113,7 +145,9 @@ data class SpawnEntry(
             maxLevel = tag.getInt(KEY_MAX_LEVEL),
             shiny = runCatching { ShinyMode.valueOf(tag.getString(KEY_SHINY)) }.getOrDefault(ShinyMode.DEFAULT),
             extraProperties = tag.getString(KEY_EXTRA),
-            placement = runCatching { SpawnPlacement.valueOf(tag.getString(KEY_PLACEMENT)) }.getOrDefault(SpawnPlacement.AUTO)
+            placement = runCatching { SpawnPlacement.valueOf(tag.getString(KEY_PLACEMENT)) }.getOrDefault(SpawnPlacement.AUTO),
+            time = runCatching { TimeCondition.valueOf(tag.getString(KEY_TIME)) }.getOrDefault(TimeCondition.ANY),
+            weather = runCatching { WeatherCondition.valueOf(tag.getString(KEY_WEATHER)) }.getOrDefault(WeatherCondition.ANY)
         )
     }
 }
@@ -122,7 +156,8 @@ data class SpawnEntry(
  * Full configuration of a single spawner. Serialized to NBT both for the
  * block entity save data and for the client <-> server GUI payloads.
  *
- * Delays are expressed in seconds, distances in blocks. Levels live on each [SpawnEntry].
+ * Delays are expressed in seconds, distances in blocks. Levels, placement, time of day and
+ * weather live on each [SpawnEntry].
  *
  * @author Darcosse
  * @version 2.0
@@ -131,12 +166,11 @@ data class SpawnEntry(
 class SpawnerConfig {
     var entries: MutableList<SpawnEntry> = mutableListOf()
     var radius = 4
-    var maxActive = 2
+    var maxActive = 3
     var spawnsPerCycle = 1
     var minDelay = 10
     var maxDelay = 30
     var activationRange = 24
-    var time = TimeCondition.ANY
     var redstone = RedstoneMode.IGNORED
     var onceOnly = false
     var uncatchable = false
@@ -188,7 +222,6 @@ class SpawnerConfig {
         putInt("MinDelay", minDelay)
         putInt("MaxDelay", maxDelay)
         putInt("ActivationRange", activationRange)
-        putString("Time", time.name)
         putString("Redstone", redstone.name)
         putBoolean("OnceOnly", onceOnly)
         putBoolean("Uncatchable", uncatchable)
@@ -202,9 +235,11 @@ class SpawnerConfig {
          * - 1: entries were raw properties strings, levels were spawner-wide (no version key written).
          * - 2: structured entries with per-entry levels.
          * - 3: per-entry spawn placement (missing in version 2 = AUTO).
+         * - 4: time of day moved from the spawner to each entry.
+         * - 5: per-entry weather condition (missing = ANY).
          * Bump it on every field change and extend [fromTag] with a migration.
          */
-        const val FORMAT_VERSION = 3
+        const val FORMAT_VERSION = 5
 
         /** Upper bounds enforced by [sanitize]. Raising them mostly costs server CPU in the spawn scan. */
         const val MAX_ENTRIES = 64
@@ -225,6 +260,9 @@ class SpawnerConfig {
         private const val V1_KEY_MIN_LEVEL = "MinLevel"
         private const val V1_KEY_MAX_LEVEL = "MaxLevel"
 
+        // Versions 1 to 3 key, only read by the migration to version 4.
+        private const val V3_KEY_TIME = "Time"
+
         /**
          * Reads a config written by any known format version, migrating older layouts.
          */
@@ -239,13 +277,19 @@ class SpawnerConfig {
                 rawEntries.map { SpawnEntry.fromTag(it) }.toMutableList()
             }
 
+            // Before version 4 the time of day was spawner-wide: copying it into every entry
+            // keeps old spawners behaving exactly as before.
+            if (version < 4) {
+                val legacyTime = runCatching { TimeCondition.valueOf(tag.getString(V3_KEY_TIME)) }.getOrDefault(TimeCondition.ANY)
+                entries = entries.map { it.copy(time = legacyTime) }.toMutableList()
+            }
+
             if (tag.contains("Radius")) radius = tag.getInt("Radius")
             if (tag.contains("MaxActive")) maxActive = tag.getInt("MaxActive")
             if (tag.contains("SpawnsPerCycle")) spawnsPerCycle = tag.getInt("SpawnsPerCycle")
             if (tag.contains("MinDelay")) minDelay = tag.getInt("MinDelay")
             if (tag.contains("MaxDelay")) maxDelay = tag.getInt("MaxDelay")
             if (tag.contains("ActivationRange")) activationRange = tag.getInt("ActivationRange")
-            time = runCatching { TimeCondition.valueOf(tag.getString("Time")) }.getOrDefault(TimeCondition.ANY)
             redstone = runCatching { RedstoneMode.valueOf(tag.getString("Redstone")) }.getOrDefault(RedstoneMode.IGNORED)
             onceOnly = tag.getBoolean("OnceOnly")
             uncatchable = tag.getBoolean("Uncatchable")

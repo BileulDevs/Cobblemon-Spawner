@@ -13,6 +13,7 @@ import dev.darcosse.common.cobblemonspawner.spawner.SpawnPlacement
 import dev.darcosse.common.cobblemonspawner.spawner.SpawnerConfig
 import dev.darcosse.common.cobblemonspawner.spawner.SpawnerTags
 import dev.darcosse.common.cobblemonspawner.spawner.TimeCondition
+import dev.darcosse.common.cobblemonspawner.spawner.WeatherCondition
 import net.minecraft.core.BlockPos
 import net.minecraft.core.HolderLookup
 import net.minecraft.core.particles.ParticleTypes
@@ -98,6 +99,7 @@ class PokemonSpawnerBlockEntity(pos: BlockPos, state: BlockState) :
 
     /**
      * Checks every spawner-wide condition except the active-count limit.
+     * Time of day and weather are per entry and checked in [pickEntry].
      */
     private fun conditionsMet(level: ServerLevel): Boolean {
         if (config.entries.isEmpty()) return false
@@ -108,12 +110,6 @@ class PokemonSpawnerBlockEntity(pos: BlockPos, state: BlockState) :
             RedstoneMode.IGNORED -> Unit
             RedstoneMode.POWERED -> if (!powered) return false
             RedstoneMode.UNPOWERED -> if (powered) return false
-        }
-
-        when (config.time) {
-            TimeCondition.ANY -> Unit
-            TimeCondition.DAY -> if (!level.isDay) return false
-            TimeCondition.NIGHT -> if (!level.isNight) return false
         }
 
         return level.hasNearbyAlivePlayer(
@@ -183,13 +179,33 @@ class PokemonSpawnerBlockEntity(pos: BlockPos, state: BlockState) :
     }
 
     /**
-     * Weighted random pick among the pool entries.
+     * Weighted random pick among the entries allowed by the current time of day and weather.
+     * Returns null when none is, e.g. a pool of night Pokémon during the day.
      */
     private fun pickEntry(level: ServerLevel): SpawnEntry? {
-        val entries = config.entries
+        val entries = config.entries.filter { isTimeAllowed(it.time, level) && isWeatherAllowed(it.weather, level) }
         if (entries.isEmpty()) return null
         var roll = level.random.nextInt(entries.sumOf { it.weight })
         return entries.first { roll -= it.weight; roll < 0 }
+    }
+
+    /**
+     * True when [time] allows spawning at the current time of day of [level].
+     */
+    private fun isTimeAllowed(time: TimeCondition, level: ServerLevel): Boolean = when (time) {
+        TimeCondition.ANY -> true
+        TimeCondition.DAY -> level.isDay
+        TimeCondition.NIGHT -> level.isNight
+    }
+
+    /**
+     * True when [weather] allows spawning with the current weather of [level].
+     */
+    private fun isWeatherAllowed(weather: WeatherCondition, level: ServerLevel): Boolean = when (weather) {
+        WeatherCondition.ANY -> true
+        WeatherCondition.CLEAR -> !level.isRaining
+        WeatherCondition.RAIN -> level.isRaining
+        WeatherCondition.THUNDER -> level.isThundering
     }
 
     /**

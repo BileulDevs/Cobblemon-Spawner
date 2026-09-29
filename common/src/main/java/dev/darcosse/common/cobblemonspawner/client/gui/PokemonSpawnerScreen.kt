@@ -9,6 +9,7 @@ import dev.darcosse.common.cobblemonspawner.spawner.RedstoneMode
 import dev.darcosse.common.cobblemonspawner.spawner.ShinyMode
 import dev.darcosse.common.cobblemonspawner.spawner.SpawnerConfig
 import dev.darcosse.common.cobblemonspawner.spawner.TimeCondition
+import dev.darcosse.common.cobblemonspawner.spawner.WeatherCondition
 import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiGraphics
 import net.minecraft.client.gui.components.Button
@@ -26,7 +27,10 @@ import kotlin.math.max
  *
  * Top: the pool, as a scrollable grid of cards showing each Pokémon's 3D model, weight and
  * level range. Clicking a card edits it in [PokemonEntryScreen], the last card adds a new one.
- * Bottom: spawner-wide settings and the save buttons.
+ * Bottom: spawner-wide settings and the action buttons.
+ *
+ * Closing the screen (Escape or Done) saves automatically; only "Save & reset" and the
+ * explicit discard (Cancel) need a click.
  *
  * Client only.
  *
@@ -53,17 +57,26 @@ class PokemonSpawnerScreen(
     private var left = 0
     private var top = 0
 
+    /**
+     * Config as received from the server. Closing only sends a save when something differs:
+     * every save resets the spawn cooldown server-side, so merely opening and closing the
+     * screen must not trigger an immediate spawn.
+     */
+    private val initialTag = config.toTag()
+
     /** First visible card row of the pool grid. */
     private var scrollRow = 0
 
     /** Resolved species/aspects per entry, rebuilt only when the pool changes. */
     private var previews: List<EntryPreview> = emptyList()
 
+    /** Draggable scrollbar of the pool grid. */
+    private val scrollbar = Scrollbar()
+
     /** One animation state per card, so animations of different species don't interfere. */
     private val cardStates = mutableMapOf<Int, FloatingState>()
 
     private val numberBoxes = mutableListOf<EditBox>()
-    private var timeButton: CycleButton<TimeCondition>? = null
     private var redstoneButton: CycleButton<RedstoneMode>? = null
     private var onceButton: CycleButton<Boolean>? = null
     private var uncatchableButton: CycleButton<Boolean>? = null
@@ -96,37 +109,36 @@ class PokemonSpawnerScreen(
         val row1 = top + TOGGLES_TOP
         val row2 = row1 + TOGGLE_ROW_STEP
 
-        timeButton = addRenderableWidget(
-            CycleButton.builder<TimeCondition> { Component.translatable(it.translationKey) }
-                .withValues(TimeCondition.entries)
-                .withInitialValue(config.time)
-                .create(column(0), row1, CELL_WIDTH, TOGGLE_HEIGHT, tr("gui.cobblemonspawner.time"))
-        )
+        // The time of day moved to each entry (format 4): five spawner-wide toggles remain.
         redstoneButton = addRenderableWidget(
             CycleButton.builder<RedstoneMode> { Component.translatable(it.translationKey) }
                 .withValues(RedstoneMode.entries)
                 .withInitialValue(config.redstone)
-                .create(column(1), row1, CELL_WIDTH, TOGGLE_HEIGHT, tr("gui.cobblemonspawner.redstone"))
+                .create(column(0), row1, CELL_WIDTH, TOGGLE_HEIGHT, tr("gui.cobblemonspawner.redstone"))
         )
-        onceButton = addRenderableWidget(toggle("once_only", config.onceOnly, column(2), row1))
-        uncatchableButton = addRenderableWidget(toggle("uncatchable", config.uncatchable, column(0), row2))
-        persistentButton = addRenderableWidget(toggle("persistent", config.persistent, column(1), row2))
-        noAiButton = addRenderableWidget(toggle("no_ai", config.noAi, column(2), row2))
+        onceButton = addRenderableWidget(toggle("once_only", config.onceOnly, column(1), row1))
+        uncatchableButton = addRenderableWidget(toggle("uncatchable", config.uncatchable, column(2), row1))
+        persistentButton = addRenderableWidget(toggle("persistent", config.persistent, column(0), row2))
+        noAiButton = addRenderableWidget(toggle("no_ai", config.noAi, column(1), row2))
 
         val actionsY = top + ACTIONS_TOP
         addRenderableWidget(
-            Button.builder(tr("gui.cobblemonspawner.save")) { save(reset = false) }
-                .bounds(column(0), actionsY, CELL_WIDTH, BUTTON_HEIGHT).build()
+            Button.builder(CommonComponents.GUI_DONE) { onClose() }
+                .bounds(column(0), actionsY, CELL_WIDTH, BUTTON_HEIGHT)
+                .tooltip(Tooltip.create(tr("gui.cobblemonspawner.done.tooltip")))
+                .build()
         )
         addRenderableWidget(
-            Button.builder(tr("gui.cobblemonspawner.save_reset")) { save(reset = true) }
+            Button.builder(tr("gui.cobblemonspawner.save_reset")) { saveAndReset() }
                 .bounds(column(1), actionsY, CELL_WIDTH, BUTTON_HEIGHT)
                 .tooltip(Tooltip.create(tr("gui.cobblemonspawner.save_reset.tooltip")))
                 .build()
         )
         addRenderableWidget(
-            Button.builder(CommonComponents.GUI_CANCEL) { onClose() }
-                .bounds(column(2), actionsY, CELL_WIDTH, BUTTON_HEIGHT).build()
+            Button.builder(CommonComponents.GUI_CANCEL) { closeWithoutSaving() }
+                .bounds(column(2), actionsY, CELL_WIDTH, BUTTON_HEIGHT)
+                .tooltip(Tooltip.create(tr("gui.cobblemonspawner.cancel.tooltip")))
+                .build()
         )
 
         clampScroll()
@@ -160,6 +172,10 @@ class PokemonSpawnerScreen(
      */
     override fun mouseClicked(mouseX: Double, mouseY: Double, button: Int): Boolean {
         if (button == LEFT_BUTTON) {
+            scrollbar.press(mouseX, mouseY, gridTrack(), scrollRow)?.let {
+                scrollRow = it
+                return true
+            }
             val slot = slotAt(mouseX, mouseY)
             if (slot != null) {
                 val entries = config.entries
@@ -179,6 +195,25 @@ class PokemonSpawnerScreen(
     }
 
     /**
+     * Moves the grid while its scrollbar is dragged; other drags go to the widgets.
+     */
+    override fun mouseDragged(mouseX: Double, mouseY: Double, button: Int, dragX: Double, dragY: Double): Boolean {
+        scrollbar.drag(mouseY, gridTrack())?.let {
+            scrollRow = it
+            return true
+        }
+        return super.mouseDragged(mouseX, mouseY, button, dragX, dragY)
+    }
+
+    /**
+     * Ends a scrollbar drag; other releases go to the widgets.
+     */
+    override fun mouseReleased(mouseX: Double, mouseY: Double, button: Int): Boolean {
+        if (scrollbar.release()) return true
+        return super.mouseReleased(mouseX, mouseY, button)
+    }
+
+    /**
      * Scrolls the pool grid one row per wheel notch when the mouse is over it.
      */
     override fun mouseScrolled(mouseX: Double, mouseY: Double, scrollX: Double, scrollY: Double): Boolean {
@@ -192,6 +227,22 @@ class PokemonSpawnerScreen(
 
     /** The world keeps running behind the screen, like vanilla block editors. */
     override fun isPauseScreen(): Boolean = false
+
+    /**
+     * Escape and Done: saves the edits (if any), then closes. Escape used to discard
+     * everything, which lost work on a stray key press.
+     *
+     * Opening the entry editor does not go through here (it replaces the screen, which only
+     * calls `removed()`), so switching to the editor never saves half-way.
+     */
+    override fun onClose() {
+        captureValues()
+        val tag = config.toTag()
+        if (tag != initialTag) {
+            SpawnerNetwork.sendToServer(SaveSpawnerConfigPayload(pos, tag, false))
+        }
+        closeWithoutSaving()
+    }
 
     // ---------------------------------------------------------------- pool grid
 
@@ -218,7 +269,7 @@ class PokemonSpawnerScreen(
         }
 
         graphics.disableScissor()
-        renderScrollBar(graphics)
+        scrollbar.render(graphics, gridTrack(), scrollRow)
     }
 
     /**
@@ -249,28 +300,48 @@ class PokemonSpawnerScreen(
         val textWidth = CELL_WIDTH - CARD_MODEL_WIDTH - CARD_PADDING - DELETE_CROSS_SIZE
         graphics.drawString(font, fitText(preview.displayName.string, textWidth), textX, y + CARD_PADDING, if (species != null) COLOR_TITLE else COLOR_ERROR)
         graphics.drawString(font, Component.translatable("gui.cobblemonspawner.entry.card.weight", entry.weight), textX, y + CARD_PADDING + CARD_LINE_STEP, COLOR_SECONDARY)
-        graphics.drawString(font, Component.translatable("gui.cobblemonspawner.entry.card.levels", entry.minLevel, entry.maxLevel), textX, y + CARD_PADDING + 2 * CARD_LINE_STEP, COLOR_SECONDARY)
 
-        if (entry.shiny == ShinyMode.ALWAYS) {
-            graphics.drawString(font, SHINY_MARK, x + CELL_WIDTH - font.width(SHINY_MARK) - CARD_PADDING, y + CARD_HEIGHT - font.lineHeight - CARD_PADDING, COLOR_SHINY)
+        // Status marks, right-aligned on the level line: time of day, weather, shiny.
+        val marks = listOfNotNull(
+            when (entry.time) {
+                TimeCondition.ANY -> null
+                TimeCondition.DAY -> DAY_MARK to COLOR_DAY
+                TimeCondition.NIGHT -> NIGHT_MARK to COLOR_NIGHT
+            },
+            when (entry.weather) {
+                WeatherCondition.ANY -> null
+                WeatherCondition.CLEAR -> CLEAR_MARK to COLOR_CLEAR
+                WeatherCondition.RAIN -> RAIN_MARK to COLOR_RAIN
+                WeatherCondition.THUNDER -> THUNDER_MARK to COLOR_THUNDER
+            },
+            if (entry.shiny == ShinyMode.ALWAYS) SHINY_MARK to COLOR_SHINY else null
+        )
+        var markRight = x + CELL_WIDTH - CARD_PADDING
+        val markY = y + CARD_PADDING + 2 * CARD_LINE_STEP
+        for ((glyph, color) in marks.asReversed()) {
+            markRight -= font.width(glyph)
+            graphics.drawString(font, glyph, markRight, markY, color)
+            markRight -= MARK_GAP
         }
+
+        // Drawn after the marks so it can be truncated to the space they leave on that line.
+        val levels = Component.translatable("gui.cobblemonspawner.entry.card.levels", entry.minLevel, entry.maxLevel).string
+        graphics.drawString(font, fitText(levels, markRight - textX), textX, y + CARD_PADDING + 2 * CARD_LINE_STEP, COLOR_SECONDARY)
         if (hovered) {
             graphics.drawString(font, DELETE_MARK, x + CELL_WIDTH - DELETE_CROSS_SIZE, y + CARD_PADDING / 2, COLOR_ERROR)
         }
     }
 
     /**
-     * Thin scroll indicator on the right edge of the grid, only when the pool overflows.
+     * Scrollbar track on the right of the grid, outside the cards.
      */
-    private fun renderScrollBar(graphics: GuiGraphics) {
-        val totalRows = totalRows()
-        if (totalRows <= VISIBLE_ROWS) return
-        val gridHeight = gridHeight()
-        val barHeight = max(SCROLLBAR_MIN_HEIGHT, gridHeight * VISIBLE_ROWS / totalRows)
-        val barY = top + GRID_TOP + (gridHeight - barHeight) * scrollRow / (totalRows - VISIBLE_ROWS)
-        val barX = left + PANEL_WIDTH + SCROLLBAR_GAP
-        graphics.fill(barX, barY, barX + SCROLLBAR_WIDTH, barY + barHeight, COLOR_SCROLLBAR)
-    }
+    private fun gridTrack(): Scrollbar.Track = Scrollbar.Track(
+        x = left + PANEL_WIDTH + SCROLLBAR_GAP,
+        top = top + GRID_TOP,
+        height = gridHeight(),
+        totalRows = totalRows(),
+        visibleRows = VISIBLE_ROWS
+    )
 
     /** Screen position of [slot], or null when it is scrolled out of view. */
     private fun slotPos(slot: Int): Pair<Int, Int>? {
@@ -331,12 +402,22 @@ class PokemonSpawnerScreen(
     }
 
     /**
-     * Sends the edited config to the server, then closes the screen.
+     * Sends the edited config with the reset flag (removes the current Pokémon, clears the
+     * once-only state), then closes. The only action that needs an explicit click.
      */
-    private fun save(reset: Boolean) {
+    private fun saveAndReset() {
         captureValues()
-        SpawnerNetwork.sendToServer(SaveSpawnerConfigPayload(pos, config.toTag(), reset))
-        onClose()
+        SpawnerNetwork.sendToServer(SaveSpawnerConfigPayload(pos, config.toTag(), true))
+        // Not onClose(): it would send a second, non-reset save.
+        closeWithoutSaving()
+    }
+
+    /**
+     * Closes the screen and drops every edit. Same as vanilla's default onClose(), which is
+     * overridden here to save.
+     */
+    private fun closeWithoutSaving() {
+        Minecraft.getInstance().setScreen(null)
     }
 
     /** Copies the widget values into [config]. No-op before the first init(). */
@@ -344,7 +425,6 @@ class PokemonSpawnerScreen(
         numberBoxes.forEachIndexed { index, box ->
             box.value.toIntOrNull()?.let { NUMBER_FIELDS[index].set(config, it) }
         }
-        timeButton?.let { config.time = it.value }
         redstoneButton?.let { config.redstone = it.value }
         onceButton?.let { config.onceOnly = it.value }
         uncatchableButton?.let { config.uncatchable = it.value }
@@ -419,9 +499,7 @@ class PokemonSpawnerScreen(
         private const val TOGGLE_HEIGHT = 18
         private const val ACTIONS_TOP = 200
         private const val BUTTON_HEIGHT = 20
-        private const val SCROLLBAR_WIDTH = 2
         private const val SCROLLBAR_GAP = 2
-        private const val SCROLLBAR_MIN_HEIGHT = 8
 
         private const val LEFT_BUTTON = 0
 
@@ -431,12 +509,26 @@ class PokemonSpawnerScreen(
         private const val COLOR_LABEL = 0xFFE0E0E0.toInt()
         private const val COLOR_ERROR = 0xFFFF5555.toInt()
         private const val COLOR_SHINY = 0xFFFFD700.toInt()
+        private const val COLOR_DAY = 0xFFFFAA00.toInt()
+        private const val COLOR_NIGHT = 0xFF8888FF.toInt()
+        private const val COLOR_CLEAR = 0xFFFFE680.toInt()
+        private const val COLOR_RAIN = 0xFF55AAFF.toInt()
+        private const val COLOR_THUNDER = 0xFFFFFF55.toInt()
         private const val COLOR_GRID_BACKGROUND = 0x80000000.toInt()
         private const val COLOR_CARD = 0x40FFFFFF
         private const val COLOR_CARD_HOVER = 0x70FFFFFF
-        private const val COLOR_SCROLLBAR = 0xFFC0C0C0.toInt()
 
-        private const val SHINY_MARK = "★"
+        /**
+         * Card status glyphs, rendered through Minecraft's Unifont fallback. The star is the
+         * night mark, so shiny uses a four-pointed sparkle to stay distinct from it.
+         */
+        private const val SHINY_MARK = "✦"
+        private const val DAY_MARK = "☀"
+        private const val NIGHT_MARK = "★"
+        private const val CLEAR_MARK = "☼"
+        private const val RAIN_MARK = "☂"
+        private const val THUNDER_MARK = "⚡"
+        private const val MARK_GAP = 2
         private const val DELETE_MARK = "✕"
         private const val ELLIPSIS = "…"
 

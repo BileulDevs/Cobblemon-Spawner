@@ -10,9 +10,9 @@ A [Cobblemon](https://www.curseforge.com/minecraft/mc-mods/cobblemon) addon that
 
 - A spawner block configured entirely through a graphical interface, no commands or JSON.
 - A pool of Pokémon shown as cards with their animated 3D model.
-- Per-Pokémon weight, level range, shiny mode, spawn position and extra Cobblemon properties.
+- Per-Pokémon weight, level range, shiny mode, time of day, weather, spawn position and extra Cobblemon properties.
 - Spawn position presets (ground, water, seafloor, lava, air), or **Auto** to reuse where the species naturally spawns in Cobblemon.
-- Adventure-map tools: spawn once (bosses), uncatchable, persistent, static, day/night and redstone conditions.
+- Adventure-map tools: spawn once (bosses), uncatchable, persistent, static, redstone conditions.
 
 ## Requirements
 
@@ -40,7 +40,13 @@ Right-click the block to open the spawner screen.
 
 ### The pool
 
-The top of the screen shows the Pokémon pool as cards: 3D model, name, weight and level range, with a ★ when the Pokémon is forced shiny.
+The top of the screen shows the Pokémon pool as cards: 3D model, name, weight and level range, with status marks:
+
+| Mark | Meaning |
+|---|---|
+| ✦ | always shiny |
+| ☀ / ★ | day only / night only |
+| ☼ / ☂ / ⚡ | clear weather / rain / thunderstorm only |
 
 - Click **+ Add Pokémon** to add an entry.
 - Click a card to edit it.
@@ -49,13 +55,15 @@ The top of the screen shows the Pokémon pool as cards: 3D model, name, weight a
 
 ### Editing a Pokémon
 
-The editor shows a searchable species list on the left and a spinning 3D preview on the right. The preview reflects the shiny mode and the form aspects typed in the extra properties.
+The editor shows a searchable species list, each species with its small 3D model, and a spinning 3D preview on the right. The preview reflects the shiny mode and the form aspects typed in the extra properties.
 
 | Setting | Default | Description |
 |---|---|---|
 | Weight | 10 | Relative chance of being picked among the spawner's Pokémon (1–10,000) |
 | Min / Max level | 5 / 15 | Level range, capped by Cobblemon's max level |
 | Shiny | Natural odds | Natural odds / always / never |
+| Time | Any | Any / day only / night only |
+| Weather | Any | Any / clear only / rain only (thunderstorms included) / thunderstorm only |
 | Position | Auto | Where the Pokémon may appear, see below |
 | Extra properties | empty | Optional Cobblemon properties, same syntax as `/pokespawn` |
 
@@ -92,7 +100,6 @@ If no valid spot exists within the spawn radius (for example a water Pokémon wi
 | Per cycle | 1 | 1–16 | Pokémon spawned at once |
 | Activation | 24 | 1–128 | A player must be within this many blocks |
 | Min / Max delay | 10 / 30 | 0–3600 | Seconds between two spawns |
-| Time | Any | | Any / day / night |
 | Redstone | Ignored | | Ignored / only when powered / only when unpowered |
 | Once | Off | | Spawns a single time, then stays inactive until reset |
 | Uncatchable | Off | | Poké Balls bounce off the spawned Pokémon |
@@ -101,14 +108,18 @@ If no valid spot exists within the spawn radius (for example a water Pokémon wi
 
 The top-right corner shows how many Pokémon from this spawner are currently alive, and whether it already spawned.
 
-- **Save** applies the configuration.
-- **Save & reset** also removes the current Pokémon and clears the *Once* state.
+- Closing the screen (**Escape** or **Done**) saves automatically.
+- **Save & reset** also removes the current Pokémon and clears the *Once* state. It is the only action that needs a click.
+- **Cancel** closes without saving.
+
+In the Pokémon editor, **Escape** keeps your changes as well; only **Cancel** discards them.
 
 Entries whose species cannot be resolved are dropped on save, and a message in chat lists them.
 
 ## How spawning works
 
-- The spawner only works while a player is within the activation range, and while the time and redstone conditions are met.
+- The spawner only works while a player is within the activation range and the redstone condition is met.
+- Each spawn picks among the Pokémon allowed by the current time of day and weather, so a single spawner can hold day, night and rain Pokémon at once.
 - It counts its own Pokémon (tagged with the spawner position), so reloading the world never duplicates them.
 - When a Pokémon is defeated or caught, the spawner waits a full delay before replacing it.
 - The spawner does nothing when its pool is empty.
@@ -118,7 +129,8 @@ Entries whose species cannot be resolved are dropped on save, and a message in c
 - **Legendary boss:** one entry, level 70–70, Once on, Persistent on, Radius 0, Max active 1. Use *Save & reset* to replay the encounter.
 - **Story Pokémon that cannot be caught:** Uncatchable on, Static on, Radius 0.
 - **Fishing pond:** Magikarp and Feebas in Auto, placed next to a pond; they only appear in the water.
-- **Night-only area:** Gastly and Hoothoot, Time set to Night.
+- **Day and night area:** Pidgey and Sentret set to Day, Gastly and Hoothoot set to Night, in the same spawner.
+- **Rainy route:** Lotad and Wooper set to Rain, a rare Rotom set to Thunder.
 - **Triggered encounter:** Redstone set to Powered, wired to a pressure plate or a button.
 
 ## Building from source

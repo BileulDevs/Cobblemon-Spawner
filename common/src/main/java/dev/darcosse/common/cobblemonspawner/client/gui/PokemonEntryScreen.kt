@@ -8,6 +8,8 @@ import dev.darcosse.common.cobblemonspawner.client.render.SpeciesCatalog
 import dev.darcosse.common.cobblemonspawner.spawner.ShinyMode
 import dev.darcosse.common.cobblemonspawner.spawner.SpawnEntry
 import dev.darcosse.common.cobblemonspawner.spawner.SpawnPlacement
+import dev.darcosse.common.cobblemonspawner.spawner.TimeCondition
+import dev.darcosse.common.cobblemonspawner.spawner.WeatherCondition
 import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiGraphics
 import net.minecraft.client.gui.components.Button
@@ -21,9 +23,12 @@ import kotlin.math.max
 
 /**
  * Editor for a single pool entry: searchable species list on the left, spinning 3D preview
- * and entry settings (weight, level range, shiny, spawn placement, extra properties) on the right.
+ * and entry settings (weight, level range, shiny, time of day, weather, spawn placement,
+ * extra properties) on the right.
  *
  * Returns to [parent] on confirm or cancel; the result is handed back through [onConfirm].
+ * Escape keeps the edits (like Confirm) so a stray key press never loses work; only the
+ * Cancel button discards them.
  * Client only.
  *
  * @author Darcosse
@@ -56,6 +61,8 @@ class PokemonEntryScreen(
     private var maxLevelText = (initial?.maxLevel ?: SpawnEntry.DEFAULT_MAX_LEVEL).toString()
     private var shiny = initial?.shiny ?: ShinyMode.DEFAULT
     private var placement = initial?.placement ?: SpawnPlacement.AUTO
+    private var time = initial?.time ?: TimeCondition.ANY
+    private var weather = initial?.weather ?: WeatherCondition.ANY
     private var extraText = initial?.extraProperties ?: ""
     private var searchText = ""
 
@@ -67,6 +74,16 @@ class PokemonEntryScreen(
     private var lastAspectKey: String? = null
     private val previewState = FloatingState()
 
+    /** Draggable scrollbar of the species list. */
+    private val scrollbar = Scrollbar()
+
+    /**
+     * One animation state per species shown in the list, keyed by species id rather than by
+     * row: keyed by row, scrolling would hand a Pikachu's animation state to a Wailord.
+     * Cleared on each search so it never grows past what the list recently displayed.
+     */
+    private val rowStates = mutableMapOf<String, FloatingState>()
+
     private var left = 0
     private var top = 0
 
@@ -76,6 +93,8 @@ class PokemonEntryScreen(
     private var maxLevelBox: EditBox? = null
     private var shinyButton: CycleButton<ShinyMode>? = null
     private var placementButton: CycleButton<SpawnPlacement>? = null
+    private var timeButton: CycleButton<TimeCondition>? = null
+    private var weatherButton: CycleButton<WeatherCondition>? = null
     private var extraBox: EditBox? = null
     private var confirmButton: Button? = null
 
@@ -109,7 +128,25 @@ class PokemonEntryScreen(
             CycleButton.builder<ShinyMode> { Component.translatable(it.translationKey) }
                 .withValues(ShinyMode.entries)
                 .withInitialValue(shiny)
+                .withTooltip { Tooltip.create(Component.translatable("${it.translationKey}.tooltip")) }
                 .create(rightX, top + SHINY_TOP, RIGHT_COLUMN_WIDTH, TOGGLE_HEIGHT, tr("gui.cobblemonspawner.entry.shiny"))
+        )
+
+        // Time and weather share a row: both have short values, and the column has no room
+        // for two more full-width rows.
+        timeButton = addRenderableWidget(
+            CycleButton.builder<TimeCondition> { Component.translatable(it.translationKey) }
+                .withValues(TimeCondition.entries)
+                .withInitialValue(time)
+                .withTooltip { Tooltip.create(Component.translatable("${it.translationKey}.tooltip")) }
+                .create(rightX, top + CONDITIONS_TOP, HALF_WIDTH, TOGGLE_HEIGHT, tr("gui.cobblemonspawner.time"))
+        )
+        weatherButton = addRenderableWidget(
+            CycleButton.builder<WeatherCondition> { Component.translatable(it.translationKey) }
+                .withValues(WeatherCondition.entries)
+                .withInitialValue(weather)
+                .withTooltip { Tooltip.create(Component.translatable("${it.translationKey}.tooltip")) }
+                .create(rightX + HALF_WIDTH + FIELD_GAP, top + CONDITIONS_TOP, HALF_WIDTH, TOGGLE_HEIGHT, tr("gui.cobblemonspawner.entry.weather"))
         )
 
         placementButton = addRenderableWidget(
@@ -134,8 +171,10 @@ class PokemonEntryScreen(
                 .bounds(rightX, top + ACTIONS_TOP, ACTION_BUTTON_WIDTH, BUTTON_HEIGHT).build()
         )
         addRenderableWidget(
-            Button.builder(CommonComponents.GUI_CANCEL) { onClose() }
-                .bounds(rightX + ACTION_BUTTON_WIDTH + FIELD_GAP, top + ACTIONS_TOP, ACTION_BUTTON_WIDTH, BUTTON_HEIGHT).build()
+            Button.builder(CommonComponents.GUI_CANCEL) { backToParent() }
+                .bounds(rightX + ACTION_BUTTON_WIDTH + FIELD_GAP, top + ACTIONS_TOP, ACTION_BUTTON_WIDTH, BUTTON_HEIGHT)
+                .tooltip(Tooltip.create(tr("gui.cobblemonspawner.entry.cancel.tooltip")))
+                .build()
         )
 
         applySearchIfChanged()
@@ -170,12 +209,43 @@ class PokemonEntryScreen(
      * Selects the species under the mouse in the list; other clicks go to the widgets.
      */
     override fun mouseClicked(mouseX: Double, mouseY: Double, button: Int): Boolean {
+        // Checked before the rows: the bar sits over their right edge.
+        if (button == LEFT_BUTTON) {
+            scrollbar.press(mouseX, mouseY, listTrack(), scrollRow)?.let {
+                scrollRow = it
+                return true
+            }
+        }
         if (button == LEFT_BUTTON && isInList(mouseX, mouseY)) {
-            val index = scrollRow + ((mouseY - (top + LIST_TOP)) / ROW_HEIGHT).toInt()
-            filtered.getOrNull(index)?.let { selected = it }
+            val row = ((mouseY - (top + LIST_TOP)) / ROW_HEIGHT).toInt()
+            // The list height is not a multiple of the row height: the leftover strip at the
+            // bottom maps to a row that is not drawn, and must not select a hidden species.
+            if (row < visibleRows()) {
+                filtered.getOrNull(scrollRow + row)?.let { selected = it }
+            }
             return true
         }
         return super.mouseClicked(mouseX, mouseY, button)
+    }
+
+    /**
+     * Moves the list while its scrollbar is dragged; other drags go to the widgets
+     * (text selection in the edit boxes).
+     */
+    override fun mouseDragged(mouseX: Double, mouseY: Double, button: Int, dragX: Double, dragY: Double): Boolean {
+        scrollbar.drag(mouseY, listTrack())?.let {
+            scrollRow = it
+            return true
+        }
+        return super.mouseDragged(mouseX, mouseY, button, dragX, dragY)
+    }
+
+    /**
+     * Ends a scrollbar drag; other releases go to the widgets.
+     */
+    override fun mouseReleased(mouseX: Double, mouseY: Double, button: Int): Boolean {
+        if (scrollbar.release()) return true
+        return super.mouseReleased(mouseX, mouseY, button)
     }
 
     /**
@@ -190,8 +260,16 @@ class PokemonEntryScreen(
         return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY)
     }
 
-    /** Escape and Cancel go back to the spawner screen instead of closing everything. */
+    /**
+     * Escape: keeps the edits and goes back to the spawner screen. Without a species there
+     * is nothing to keep, so it simply goes back.
+     */
     override fun onClose() {
+        if (selected != null) confirm() else backToParent()
+    }
+
+    /** Returns to the spawner screen without touching the pool. */
+    private fun backToParent() {
         Minecraft.getInstance().setScreen(parent)
     }
 
@@ -222,18 +300,33 @@ class PokemonEntryScreen(
                 option === selected -> graphics.fill(left, y, left + LIST_WIDTH, y + ROW_HEIGHT, COLOR_ROW_SELECTED)
                 hovered -> graphics.fill(left, y, left + LIST_WIDTH, y + ROW_HEIGHT, COLOR_ROW_HOVER)
             }
-            graphics.drawString(font, fitText(option.name.string, LIST_WIDTH - 2 * ROW_PADDING), left + ROW_PADDING, y + ROW_TEXT_OFFSET, COLOR_TITLE)
+
+            renderRowModel(graphics, option, y)
+
+            val textX = left + ROW_PADDING + ROW_ICON_WIDTH + ROW_ICON_GAP
+            val textWidth = LIST_WIDTH - (textX - left) - ROW_PADDING - Scrollbar.WIDTH
+            graphics.drawString(font, fitText(option.name.string, textWidth), textX, y + (ROW_HEIGHT - font.lineHeight) / 2 + ROW_TEXT_NUDGE, COLOR_TITLE)
         }
         graphics.disableScissor()
 
-        val total = filtered.size
-        val visible = visibleRows()
-        if (total > visible) {
-            val barHeight = max(SCROLLBAR_MIN_HEIGHT, LIST_HEIGHT * visible / total)
-            val barY = listTop + (LIST_HEIGHT - barHeight) * scrollRow / (total - visible)
-            val barX = left + LIST_WIDTH - SCROLLBAR_WIDTH
-            graphics.fill(barX, barY, barX + SCROLLBAR_WIDTH, barY + barHeight, COLOR_SCROLLBAR)
-        }
+        scrollbar.render(graphics, listTrack(), scrollRow)
+    }
+
+    /**
+     * Draws the small animated model at the start of a list row, clipped to its icon cell.
+     * The nested scissor is intersected with the list one by GuiGraphics.
+     */
+    private fun renderRowModel(graphics: GuiGraphics, option: SpeciesOption, rowY: Int) {
+        val iconX = left + ROW_PADDING
+        graphics.enableScissor(iconX, rowY, iconX + ROW_ICON_WIDTH, rowY + ROW_HEIGHT)
+        PokemonModelRenderer.render(
+            graphics, option.species, emptySet(),
+            centerX = iconX + ROW_ICON_WIDTH / 2f,
+            anchorY = rowY + ROW_MODEL_ANCHOR_Y,
+            scale = ROW_MODEL_SCALE,
+            state = rowStates.getOrPut(option.id) { FloatingState() }
+        )
+        graphics.disableScissor()
     }
 
     /**
@@ -266,14 +359,26 @@ class PokemonEntryScreen(
         )
         graphics.disableScissor()
 
+        // The name sits inside the preview box to save a row. It is pushed above the model's
+        // depth, otherwise the model (drawn at z=200) would hide it.
         val name = option.name
-        graphics.drawString(font, name, boxX + (RIGHT_COLUMN_WIDTH - font.width(name)) / 2, top + NAME_TOP, if (shiny == ShinyMode.ALWAYS) COLOR_SHINY else COLOR_TITLE)
+        val poseStack = graphics.pose()
+        poseStack.pushPose()
+        poseStack.translate(0f, 0f, NAME_Z)
+        graphics.drawString(
+            font, name,
+            boxX + (RIGHT_COLUMN_WIDTH - font.width(name)) / 2,
+            boxY + PREVIEW_HEIGHT - font.lineHeight - NAME_BOTTOM_PADDING,
+            if (shiny == ShinyMode.ALWAYS) COLOR_SHINY else COLOR_TITLE
+        )
+        poseStack.popPose()
     }
 
     /** Re-filters the list when the search text changed since the last call. */
     private fun applySearchIfChanged() {
         if (searchText == lastAppliedSearch) return
         lastAppliedSearch = searchText
+        rowStates.clear()
         val query = searchText.trim().lowercase()
         filtered = if (query.isEmpty()) allOptions else allOptions.filter { query in it.searchKey }
         scrollRow = 0
@@ -301,6 +406,17 @@ class PokemonEntryScreen(
         scrollRow = scrollRow.coerceIn(0, max(0, filtered.size - visibleRows()))
     }
 
+    /**
+     * Scrollbar track, drawn over the right edge of the list.
+     */
+    private fun listTrack(): Scrollbar.Track = Scrollbar.Track(
+        x = left + LIST_WIDTH - Scrollbar.WIDTH,
+        top = top + LIST_TOP,
+        height = LIST_HEIGHT,
+        totalRows = filtered.size,
+        visibleRows = visibleRows()
+    )
+
     /** Rows of the species list visible at once. */
     private fun visibleRows(): Int = LIST_HEIGHT / ROW_HEIGHT
 
@@ -325,10 +441,12 @@ class PokemonEntryScreen(
                 maxLevel = maxLevelText.toIntOrNull()?.coerceAtLeast(1) ?: SpawnEntry.DEFAULT_MAX_LEVEL,
                 shiny = shiny,
                 extraProperties = extraText.trim(),
-                placement = placement
+                placement = placement,
+                time = time,
+                weather = weather
             )
         )
-        onClose()
+        backToParent()
     }
 
     /** Copies the widget values into the edited fields. No-op before the first init(). */
@@ -339,6 +457,8 @@ class PokemonEntryScreen(
         maxLevelBox?.let { maxLevelText = it.value }
         shinyButton?.let { shiny = it.value }
         placementButton?.let { placement = it.value }
+        timeButton?.let { time = it.value }
+        weatherButton?.let { weather = it.value }
         extraBox?.let { extraText = it.value }
     }
 
@@ -375,10 +495,27 @@ class PokemonEntryScreen(
         private const val SEARCH_TOP = 14
         private const val LIST_TOP = 34
         private const val LIST_HEIGHT = 184
-        private const val ROW_HEIGHT = 11
+        /**
+         * Row height, raised from 11 to fit a model next to the name. 9 rows are visible;
+         * raising it shows fewer rows, lowering it makes models unreadable.
+         */
+        private const val ROW_HEIGHT = 20
         private const val ROW_PADDING = 3
-        private const val ROW_TEXT_OFFSET = 2
-        private const val SCROLL_STEP = 3
+        private const val ROW_ICON_WIDTH = 20
+        private const val ROW_ICON_GAP = 4
+
+        /** The font's line height includes the descender: +1 px centers the letters visually. */
+        private const val ROW_TEXT_NUDGE = 1
+
+        /**
+         * Model scale and anchor in a list row. Visual tuning only: raise the scale for bigger
+         * models, move the anchor if models are cut at the top or bottom of the row.
+         */
+        private const val ROW_MODEL_SCALE = 8f
+        private const val ROW_MODEL_ANCHOR_Y = 3f
+
+        /** Rows per wheel notch; 2 rows of 20 px scroll about as far as the old 3 rows of 11 px. */
+        private const val SCROLL_STEP = 2
         private const val SEARCH_MAX_LENGTH = 32
 
         /** Rows kept above the selected species when the editor opens, for context. */
@@ -387,38 +524,46 @@ class PokemonEntryScreen(
         private const val RIGHT_COLUMN_OFFSET = 140
         private const val RIGHT_COLUMN_WIDTH = 190
         private const val PREVIEW_TOP = 14
-        /** Shrunk from 84 to make room for the placement row; the panel must stay 222 px tall. */
-        private const val PREVIEW_HEIGHT = 64
+        /**
+         * Shrunk twice (84, then 64) to make room for the placement and weather rows;
+         * the panel must stay 222 px tall.
+         */
+        private const val PREVIEW_HEIGHT = 52
 
         /**
          * Model scale and anchor in the preview box. Visual tuning only: raise the scale for
          * bigger models, move the anchor if models are cut at the top or bottom.
          */
-        private const val PREVIEW_MODEL_SCALE = 24f
-        private const val PREVIEW_MODEL_ANCHOR_Y = 8f
+        private const val PREVIEW_MODEL_SCALE = 20f
+        private const val PREVIEW_MODEL_ANCHOR_Y = 6f
+
+        /** Above the model (200), below tooltips (400). */
+        private const val NAME_Z = 300f
+        private const val NAME_BOTTOM_PADDING = 2
 
         /** One full turn every 12 s. Lower = faster spin. */
         private const val PREVIEW_ROTATION_PERIOD_MS = 12_000L
         private const val FULL_TURN_DEGREES = 360f
 
-        private const val NAME_TOP = 81
-        private const val NUMBERS_LABEL_TOP = 93
-        private const val NUMBERS_TOP = 102
+        private const val NUMBERS_LABEL_TOP = 70
+        private const val NUMBERS_TOP = 79
         private const val SMALL_FIELD_WIDTH = 58
         private const val FIELD_GAP = 8
         private const val NUMBER_MAX_LENGTH = 5
-        private const val SHINY_TOP = 122
-        private const val PLACEMENT_TOP = 144
-        private const val EXTRA_LABEL_TOP = 166
-        private const val EXTRA_TOP = 176
+        private const val SHINY_TOP = 99
+        private const val CONDITIONS_TOP = 121
+
+        /** Width of the two buttons sharing the time / weather row: (190 - 8) / 2. */
+        private const val HALF_WIDTH = (RIGHT_COLUMN_WIDTH - FIELD_GAP) / 2
+        private const val PLACEMENT_TOP = 143
+        private const val EXTRA_LABEL_TOP = 165
+        private const val EXTRA_TOP = 175
         private const val EXTRA_MAX_LENGTH = 256
         private const val ACTIONS_TOP = 198
         private const val ACTION_BUTTON_WIDTH = 91
         private const val FIELD_HEIGHT = 16
         private const val TOGGLE_HEIGHT = 18
         private const val BUTTON_HEIGHT = 20
-        private const val SCROLLBAR_WIDTH = 2
-        private const val SCROLLBAR_MIN_HEIGHT = 8
 
         private const val LEFT_BUTTON = 0
 
@@ -430,7 +575,6 @@ class PokemonEntryScreen(
         private const val COLOR_PANEL_BACKGROUND = 0x80000000.toInt()
         private const val COLOR_ROW_SELECTED = 0x80FFFFFF.toInt()
         private const val COLOR_ROW_HOVER = 0x30FFFFFF
-        private const val COLOR_SCROLLBAR = 0xFFC0C0C0.toInt()
 
         private const val ELLIPSIS = "…"
     }

@@ -15,9 +15,11 @@ object SpawnerNetwork {
      * - 1: no version field (initial release).
      * - 2: version field added; the embedded config uses SpawnerConfig format 2.
      * - 3: embedded config uses SpawnerConfig format 3 (per-entry placement).
+     * - 4: embedded config uses SpawnerConfig format 4 (per-entry time of day).
+     * - 5: embedded config uses SpawnerConfig format 5 (per-entry weather).
      * Bump it on every payload field change. Also used as the NeoForge registrar version.
      */
-    const val PROTOCOL_VERSION = 3
+    const val PROTOCOL_VERSION = 5
 
     /**
      * Reads and checks the protocol version at the start of a payload.
