@@ -6,43 +6,134 @@ A [Cobblemon](https://www.curseforge.com/minecraft/mc-mods/cobblemon) addon that
 [![Fabric](https://img.shields.io/badge/Fabric-supported-dbb37d?logo=fabric)](https://fabricmc.net)
 [![NeoForge](https://img.shields.io/badge/NeoForge-supported-e04e14)](https://neoforged.net)
 
+## Features
+
+- A spawner block configured entirely through a graphical interface, no commands or JSON.
+- A pool of Pokémon shown as cards with their animated 3D model.
+- Per-Pokémon weight, level range, shiny mode, spawn position and extra Cobblemon properties.
+- Spawn position presets (ground, water, seafloor, lava, air), or **Auto** to reuse where the species naturally spawns in Cobblemon.
+- Adventure-map tools: spawn once (bosses), uncatchable, persistent, static, day/night and redstone conditions.
+
+## Requirements
+
+| Loader | Dependencies |
+|---|---|
+| Fabric | Fabric API, Fabric Language Kotlin, Cobblemon 1.8.0+ |
+| NeoForge | Kotlin for Forge, Cobblemon 1.8.0+ |
+
+The mod must be installed on **both the client and the server**.
+
 ## Getting the block
 
-`/give @s cobblemonspawner:pokemon_spawner`, or the *Operator Utilities* creative tab (enable it in Controls > "Operator Items Tab").
-Like a command block, it can only be placed and configured by an operator in creative, and is unbreakable in survival.
+`/give @s cobblemonspawner:pokemon_spawner`, or the *Operator Utilities* creative tab (enable it in Options > Controls > "Operator Items Tab").
 
-## Configuration
+Like a command block:
 
-Right-click the block. The pool takes one Pokémon per line, using the **Cobblemon properties syntax** (the same as `/pokespawn`), with an optional weight prefix:
+- only an operator in creative mode can place and configure it;
+- it can only be broken in creative mode (unbreakable in survival and adventure, immune to explosions, cannot be pushed by pistons).
+
+Breaking the spawner removes the wild Pokémon it created, except those currently in battle.
+
+## Configuring a spawner
+
+Right-click the block to open the spawner screen.
+
+### The pool
+
+The top of the screen shows the Pokémon pool as cards: 3D model, name, weight and level range, with a ★ when the Pokémon is forced shiny.
+
+- Click **+ Add Pokémon** to add an entry.
+- Click a card to edit it.
+- Hover a card and click the **✕** to remove it.
+- Scroll with the mouse wheel when the pool has more than five entries.
+
+### Editing a Pokémon
+
+The editor shows a searchable species list on the left and a spinning 3D preview on the right. The preview reflects the shiny mode and the form aspects typed in the extra properties.
+
+| Setting | Default | Description |
+|---|---|---|
+| Weight | 10 | Relative chance of being picked among the spawner's Pokémon (1–10,000) |
+| Min / Max level | 5 / 15 | Level range, capped by Cobblemon's max level |
+| Shiny | Natural odds | Natural odds / always / never |
+| Position | Auto | Where the Pokémon may appear, see below |
+| Extra properties | empty | Optional Cobblemon properties, same syntax as `/pokespawn` |
+
+Extra properties cover everything the interface does not, for example:
 
 ```
-10: pikachu
-5: eevee level=20
-1: pikachu shiny=yes
+alolan
+nature=modest gender=female
+galarian ability=...
 ```
 
-A `level=` in the line overrides the spawner's level range.
+A `level=` written in the extra properties overrides the level range.
 
-| Option | Description |
+### Spawn positions
+
+| Position | The Pokémon appears... |
 |---|---|
-| Min / Max level | Random level range |
-| Radius | Horizontal spawn radius (0 = on top of the block) |
-| Max active | Max Pokémon from this spawner alive at once |
-| Per cycle | Pokémon spawned per cycle |
-| Activation | A player must be within this range |
-| Min / Max delay | Seconds between spawns (also the respawn delay after a Pokémon is defeated or caught) |
-| Time | Any / Day / Night |
-| Redstone | Ignored / only when powered / only when unpowered |
-| Once | Spawns a single time until reset (bosses, legendaries) |
-| Uncatchable | Poké Balls bounce off |
-| Persistent | No natural despawn |
-| Static | NoAI |
+| **Auto** | where the species naturally spawns in Cobblemon; *Ground* if it has no natural spawn (legendaries, datapack species) |
+| Ground | on a solid block, out of any liquid |
+| Submerged | fully underwater, at any depth |
+| Water surface | floating on the water surface |
+| Seafloor | underwater, resting on a solid block |
+| Lava | in lava, resting on a solid block |
+| Air | in the air, never on the ground |
 
-Breaking the spawner removes the wild Pokémon it created (except those in battle).
+If no valid spot exists within the spawn radius (for example a water Pokémon with no water nearby), the Pokémon simply does not appear.
 
-## Project layout
+### Spawner settings
 
-Architectury multiloader (Fabric + NeoForge, Minecraft 1.21.1):
+| Option | Default | Range | Description |
+|---|---|---|---|
+| Radius | 4 | 0–32 | Horizontal spawn radius in blocks. 0 = on or right around the block |
+| Max active | 2 | 1–32 | Max Pokémon from this spawner alive at the same time |
+| Per cycle | 1 | 1–16 | Pokémon spawned at once |
+| Activation | 24 | 1–128 | A player must be within this many blocks |
+| Min / Max delay | 10 / 30 | 0–3600 | Seconds between two spawns |
+| Time | Any | | Any / day / night |
+| Redstone | Ignored | | Ignored / only when powered / only when unpowered |
+| Once | Off | | Spawns a single time, then stays inactive until reset |
+| Uncatchable | Off | | Poké Balls bounce off the spawned Pokémon |
+| Persistent | On | | Spawned Pokémon never despawn naturally |
+| Static | Off | | Spawned Pokémon do not move (NoAI) |
 
-- `common` — block, block entity, spawn logic, GUI, payloads
-- `fabric` / `neoforge` — registration, networking and entry points only
+The top-right corner shows how many Pokémon from this spawner are currently alive, and whether it already spawned.
+
+- **Save** applies the configuration.
+- **Save & reset** also removes the current Pokémon and clears the *Once* state.
+
+Entries whose species cannot be resolved are dropped on save, and a message in chat lists them.
+
+## How spawning works
+
+- The spawner only works while a player is within the activation range, and while the time and redstone conditions are met.
+- It counts its own Pokémon (tagged with the spawner position), so reloading the world never duplicates them.
+- When a Pokémon is defeated or caught, the spawner waits a full delay before replacing it.
+- The spawner does nothing when its pool is empty.
+
+## Adventure map examples
+
+- **Legendary boss:** one entry, level 70–70, Once on, Persistent on, Radius 0, Max active 1. Use *Save & reset* to replay the encounter.
+- **Story Pokémon that cannot be caught:** Uncatchable on, Static on, Radius 0.
+- **Fishing pond:** Magikarp and Feebas in Auto, placed next to a pond; they only appear in the water.
+- **Night-only area:** Gastly and Hoothoot, Time set to Night.
+- **Triggered encounter:** Redstone set to Powered, wired to a pressure plate or a button.
+
+## Building from source
+
+```
+./gradlew build
+```
+
+The jars are written to `fabric/build/libs` and `neoforge/build/libs`.
+
+Architectury multiloader project (Fabric + NeoForge, Minecraft 1.21.1):
+
+- `common`: block, block entity, spawn logic, placement presets, GUI, payloads;
+- `fabric` / `neoforge`: registration, networking and entry points only.
+
+## License
+
+MIT
