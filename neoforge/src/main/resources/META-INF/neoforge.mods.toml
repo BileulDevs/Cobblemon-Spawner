@@ -1,0 +1,33 @@
+modLoader = "javafml"
+loaderVersion = "[1,)"
+license = "MIT License"
+
+[[mods]]
+modId = "cobblemonspawner"
+version = "${version}"
+displayName = "Cobblemon Spawner"
+authors = "Darcosse"
+description = '''
+A configurable Pokémon spawner block for Cobblemon, built for adventure maps.
+'''
+
+[[dependencies.cobblemonspawner]]
+modId = "minecraft"
+mandatory = true
+versionRange = "[1.21.1]"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.cobblemonspawner]]
+modId = "neoforge"
+mandatory = true
+versionRange = "[21.1.182,)"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.cobblemonspawner]]
+modId = "cobblemon"
+mandatory = true
+versionRange = "[1.8.0,)"
+ordering = "AFTER"
+side = "BOTH"

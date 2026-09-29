@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "cobblemonspawner",
+  "version": "${version}",
+  "name": "Cobblemon Spawner",
+  "description": "A configurable Pokémon spawner block for Cobblemon, built for adventure maps.",
+  "authors": [
+    "Darcosse"
+  ],
+  "license": "MIT License",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "dev.darcosse.fabric.cobblemonspawner.CobblemonSpawnerFabric"
+    ],
+    "client": [
+      "dev.darcosse.fabric.cobblemonspawner.client.CobblemonSpawnerFabricClient"
+    ]
+  },
+  "depends": {
+    "minecraft": "1.21.1",
+    "fabricloader": ">=0.17.0",
+    "fabric-api": "*",
+    "fabric-language-kotlin": "*",
+    "cobblemon": ">=1.8.0"
+  }
+}

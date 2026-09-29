@@ -1,0 +1,5 @@
+{
+  "variants": {
+    "": { "model": "cobblemonspawner:block/pokemon_spawner" }
+  }
+}
