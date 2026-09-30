@@ -88,5 +88,6 @@
   "gui.cobblemonspawner.entry.weather.thunder.tooltip": "N'apparaît que pendant un orage.",
   "gui.cobblemonspawner.done.tooltip": "Enregistre et ferme. Échap fait la même chose.",
   "gui.cobblemonspawner.cancel.tooltip": "Ferme sans enregistrer : toutes les modifications depuis l'ouverture sont perdues.",
-  "gui.cobblemonspawner.entry.cancel.tooltip": "Revient sans garder les modifications de ce Pokémon. Échap les garde."
+  "gui.cobblemonspawner.entry.cancel.tooltip": "Revient sans garder les modifications de ce Pokémon. Échap les garde.",
+  "gui.cobblemonspawner.entry.card.chance": "%s %%"
 }

@@ -7,6 +7,7 @@ import dev.darcosse.common.cobblemonspawner.network.SaveSpawnerConfigPayload
 import dev.darcosse.common.cobblemonspawner.network.SpawnerNetwork
 import dev.darcosse.common.cobblemonspawner.spawner.RedstoneMode
 import dev.darcosse.common.cobblemonspawner.spawner.ShinyMode
+import dev.darcosse.common.cobblemonspawner.spawner.SpawnEntry
 import dev.darcosse.common.cobblemonspawner.spawner.SpawnerConfig
 import dev.darcosse.common.cobblemonspawner.spawner.TimeCondition
 import dev.darcosse.common.cobblemonspawner.spawner.WeatherCondition
@@ -21,6 +22,7 @@ import net.minecraft.core.BlockPos
 import net.minecraft.network.chat.CommonComponents
 import net.minecraft.network.chat.Component
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 /**
  * Main configuration screen of the Pokémon spawner.
@@ -255,6 +257,8 @@ class PokemonSpawnerScreen(
         graphics.enableScissor(left, top + GRID_TOP, left + PANEL_WIDTH, gridBottom)
 
         val slotCount = config.entries.size + 1
+        // Summed once per frame rather than once per card.
+        val totalWeight = config.entries.sumOf { it.weight }
         for (slot in 0 until slotCount) {
             val (x, y) = slotPos(slot) ?: continue
             val hovered = mouseX in x until x + CELL_WIDTH && mouseY in y until y + CARD_HEIGHT && isInGrid(mouseX.toDouble(), mouseY.toDouble())
@@ -264,7 +268,7 @@ class PokemonSpawnerScreen(
                 val label = tr("gui.cobblemonspawner.entries.add")
                 graphics.drawString(font, label, x + (CELL_WIDTH - font.width(label)) / 2, y + (CARD_HEIGHT - font.lineHeight) / 2, COLOR_TITLE)
             } else {
-                renderCard(graphics, slot, x, y, hovered)
+                renderCard(graphics, slot, x, y, hovered, totalWeight)
             }
         }
 
@@ -273,9 +277,12 @@ class PokemonSpawnerScreen(
     }
 
     /**
-     * Draws one entry card: 3D model on the left, name / weight / levels on the right.
+     * Draws one entry card: 3D model on the left, name / weight and spawn chance / levels
+     * on the right.
+     *
+     * @param totalWeight sum of the weights of the whole pool, for the spawn chance
      */
-    private fun renderCard(graphics: GuiGraphics, slot: Int, x: Int, y: Int, hovered: Boolean) {
+    private fun renderCard(graphics: GuiGraphics, slot: Int, x: Int, y: Int, hovered: Boolean, totalWeight: Int) {
         val entry = config.entries[slot]
         val preview = previews[slot]
 
@@ -299,9 +306,29 @@ class PokemonSpawnerScreen(
         val textX = x + CARD_MODEL_WIDTH + CARD_PADDING
         val textWidth = CELL_WIDTH - CARD_MODEL_WIDTH - CARD_PADDING - DELETE_CROSS_SIZE
         graphics.drawString(font, fitText(preview.displayName.string, textWidth), textX, y + CARD_PADDING, if (species != null) COLOR_TITLE else COLOR_ERROR)
-        graphics.drawString(font, Component.translatable("gui.cobblemonspawner.entry.card.weight", entry.weight), textX, y + CARD_PADDING + CARD_LINE_STEP, COLOR_SECONDARY)
 
-        // Status marks, right-aligned on the level line: time of day, weather, shiny.
+        // Detail lines are drawn scaled down so "Weight N" + chance and the full level range
+        // fit next to the model; the name keeps the normal size. Everything inside the pose
+        // block uses local coordinates, where the available width is divided by the scale.
+        val detailsWidth = ((x + CELL_WIDTH - CARD_PADDING - textX) / DETAIL_SCALE).toInt()
+        val poseStack = graphics.pose()
+        poseStack.pushPose()
+        poseStack.translate(textX.toFloat(), (y + DETAILS_TOP).toFloat(), 0f)
+        poseStack.scale(DETAIL_SCALE, DETAIL_SCALE, 1f)
+        renderWeightLine(graphics, entry.weight, totalWeight, 0, detailsWidth, 0)
+        renderLevelLine(graphics, entry, detailsWidth, DETAIL_LINE_STEP)
+        poseStack.popPose()
+
+        if (hovered) {
+            graphics.drawString(font, DELETE_MARK, x + CELL_WIDTH - DELETE_CROSS_SIZE, y + CARD_PADDING / 2, COLOR_ERROR)
+        }
+    }
+
+    /**
+     * Draws the level range and, right-aligned on the same line, the status marks
+     * (time of day, weather, shiny). Coordinates are local to the scaled detail block.
+     */
+    private fun renderLevelLine(graphics: GuiGraphics, entry: SpawnEntry, rightX: Int, lineY: Int) {
         val marks = listOfNotNull(
             when (entry.time) {
                 TimeCondition.ANY -> null
@@ -316,20 +343,49 @@ class PokemonSpawnerScreen(
             },
             if (entry.shiny == ShinyMode.ALWAYS) SHINY_MARK to COLOR_SHINY else null
         )
-        var markRight = x + CELL_WIDTH - CARD_PADDING
-        val markY = y + CARD_PADDING + 2 * CARD_LINE_STEP
+        var markRight = rightX
         for ((glyph, color) in marks.asReversed()) {
             markRight -= font.width(glyph)
-            graphics.drawString(font, glyph, markRight, markY, color)
+            graphics.drawString(font, glyph, markRight, lineY, color)
             markRight -= MARK_GAP
         }
 
         // Drawn after the marks so it can be truncated to the space they leave on that line.
         val levels = Component.translatable("gui.cobblemonspawner.entry.card.levels", entry.minLevel, entry.maxLevel).string
-        graphics.drawString(font, fitText(levels, markRight - textX), textX, y + CARD_PADDING + 2 * CARD_LINE_STEP, COLOR_SECONDARY)
-        if (hovered) {
-            graphics.drawString(font, DELETE_MARK, x + CELL_WIDTH - DELETE_CROSS_SIZE, y + CARD_PADDING / 2, COLOR_ERROR)
-        }
+        graphics.drawString(font, fitText(levels, markRight), 0, lineY, COLOR_SECONDARY)
+    }
+
+    /**
+     * Draws "Weight N" on the left and the spawn chance right-aligned, on one card line.
+     *
+     * Drawn in the scaled detail block, which leaves about 82 local units of width. If
+     * "Weight N" and the percentage still don't fit together (very large weights, longer
+     * languages), the word is dropped and only the number stays. The percentage always stays,
+     * it is the point of the line.
+     */
+    private fun renderWeightLine(graphics: GuiGraphics, weight: Int, totalWeight: Int, textX: Int, rightX: Int, lineY: Int) {
+        val chance = Component.translatable("gui.cobblemonspawner.entry.card.chance", formatChance(weight, totalWeight)).string
+        val chanceX = rightX - font.width(chance)
+        graphics.drawString(font, chance, chanceX, lineY, COLOR_CHANCE)
+
+        val available = chanceX - PERCENT_GAP - textX
+        val fullLabel = Component.translatable("gui.cobblemonspawner.entry.card.weight", weight).string
+        val label = if (font.width(fullLabel) <= available) fullLabel else fitText(weight.toString(), available)
+        graphics.drawString(font, label, textX, lineY, COLOR_SECONDARY)
+    }
+
+    /**
+     * Share of [weight] in [totalWeight], as the number shown before the percent sign.
+     *
+     * Rounded to whole percents, which is enough to compare entries at a glance; a non-zero
+     * share that rounds to 0 shows as "<1" so a rare Pokémon never looks impossible.
+     * This is the chance over the whole pool: when time of day or weather filters out some
+     * entries, the remaining ones are proportionally more likely at that moment.
+     */
+    private fun formatChance(weight: Int, totalWeight: Int): String {
+        if (totalWeight <= 0) return "0"
+        val percent = weight * PERCENT_SCALE / totalWeight
+        return if (percent > 0.0 && percent < 1.0) LESS_THAN_ONE else percent.roundToInt().toString()
     }
 
     /**
@@ -474,7 +530,19 @@ class PokemonSpawnerScreen(
         private const val CARD_HEIGHT = 44
         private const val CARD_GAP = 2
         private const val CARD_PADDING = 4
-        private const val CARD_LINE_STEP = 12
+
+        /**
+         * Scale of the weight and level lines, the name keeps full size. 0.75 fits
+         * "Weight 100" + "91%" and "Lv. 100–100" + three marks. Lower = more room but blurrier
+         * at small GUI scales; 1 restores the old, truncated layout.
+         */
+        private const val DETAIL_SCALE = 0.75f
+
+        /** Top of the detail block, just under the name line. */
+        private const val DETAILS_TOP = 18
+
+        /** Line spacing inside the detail block, in local (unscaled) units: 12 × 0.75 = 9 px. */
+        private const val DETAIL_LINE_STEP = 12
 
         /** Width reserved for the model on the left of a card. */
         private const val CARD_MODEL_WIDTH = 36
@@ -509,6 +577,7 @@ class PokemonSpawnerScreen(
         private const val COLOR_LABEL = 0xFFE0E0E0.toInt()
         private const val COLOR_ERROR = 0xFFFF5555.toInt()
         private const val COLOR_SHINY = 0xFFFFD700.toInt()
+        private const val COLOR_CHANCE = 0xFF7FD67F.toInt()
         private const val COLOR_DAY = 0xFFFFAA00.toInt()
         private const val COLOR_NIGHT = 0xFF8888FF.toInt()
         private const val COLOR_CLEAR = 0xFFFFE680.toInt()
@@ -529,6 +598,11 @@ class PokemonSpawnerScreen(
         private const val RAIN_MARK = "☂"
         private const val THUNDER_MARK = "⚡"
         private const val MARK_GAP = 2
+
+        /** Space between the weight label and the right-aligned spawn chance. */
+        private const val PERCENT_GAP = 4
+        private const val PERCENT_SCALE = 100.0
+        private const val LESS_THAN_ONE = "<1"
         private const val DELETE_MARK = "✕"
         private const val ELLIPSIS = "…"
 

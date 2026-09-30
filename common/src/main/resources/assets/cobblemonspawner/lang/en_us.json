@@ -88,5 +88,6 @@
   "gui.cobblemonspawner.entry.weather.thunder.tooltip": "Only spawns during a thunderstorm.",
   "gui.cobblemonspawner.done.tooltip": "Saves and closes. Escape does the same.",
   "gui.cobblemonspawner.cancel.tooltip": "Closes without saving: every change made since opening is lost.",
-  "gui.cobblemonspawner.entry.cancel.tooltip": "Goes back without keeping the changes made to this Pokémon. Escape keeps them."
+  "gui.cobblemonspawner.entry.cancel.tooltip": "Goes back without keeping the changes made to this Pokémon. Escape keeps them.",
+  "gui.cobblemonspawner.entry.card.chance": "%s%%"
 }
